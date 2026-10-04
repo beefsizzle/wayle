@@ -164,6 +164,7 @@ impl FileWatcher {
         }
 
         config.commit_config_reload();
+        self.config_service.record_synced();
 
         Ok(())
     }
@@ -184,6 +185,7 @@ impl FileWatcher {
         config.reset_runtime_layer();
         let _ = config.apply_runtime_layer(&runtime_toml, "");
         config.commit_config_reload();
+        self.config_service.record_synced();
 
         Ok(())
     }

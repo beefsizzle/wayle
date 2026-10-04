@@ -31,7 +31,18 @@ impl PersistenceWatcher {
             while rx.recv().await.is_some() {
                 debug!("Config change detected, persisting to disk");
 
-                if let Err(e) = service.save().await {
+                // The lock keeps this write from interleaving with `wayle config set`, and
+                // `save_if_changed` keeps reloads of other writers' changes from being
+                // written back as a stale snapshot.
+                let _lock = match ConfigService::lock_runtime().await {
+                    Ok(lock) => Some(lock),
+                    Err(e) => {
+                        error!(error = %e, "cannot lock runtime.toml, persisting without it");
+                        None
+                    }
+                };
+
+                if let Err(e) = service.save_if_changed().await {
                     error!(error = %e, "cannot persist config changes");
                 }
             }

@@ -1,10 +1,12 @@
 use std::{
+    fs::TryLockError,
     io,
     path::{Path, PathBuf},
     sync::{
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use tokio::{
@@ -27,14 +29,84 @@ use crate::{
 /// Distinguishes temp files written by concurrent saves within one process.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How long to wait for another process to release the runtime lock before giving up.
+const RUNTIME_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const RUNTIME_LOCK_POLL: Duration = Duration::from_millis(25);
+const RUNTIME_LOCK_NOTICE_AFTER: Duration = Duration::from_secs(1);
+
 /// Exclusive, cross-process lock over `runtime.toml`'s read-modify-write cycle.
 ///
 /// Held from before the config is loaded until after it is saved, so concurrent writers (for
 /// example several `wayle config set` runs) apply one after another instead of each saving a
 /// snapshot that is missing the others' changes. Released on drop.
+///
+/// Not reentrant: acquiring it again while holding it, even from the same process, waits for
+/// the first guard and times out.
 #[derive(Debug)]
 pub struct RuntimeLock {
     _file: std::fs::File,
+}
+
+impl RuntimeLock {
+    /// Blocks (up to `timeout`) until the lock at `path` is free, then takes it.
+    ///
+    /// If the filesystem cannot lock at all, warns and carries on unlocked: the old
+    /// unserialized behaviour beats refusing to write settings.
+    fn acquire(path: &Path, timeout: Duration) -> Result<Self, Error> {
+        let persistence = |source| Error::Persistence {
+            path: path.to_path_buf(),
+            source,
+        };
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(persistence)?;
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(persistence)?;
+
+        let started = Instant::now();
+        let mut announced = false;
+
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(TryLockError::WouldBlock) => {
+                    let waited = started.elapsed();
+
+                    if waited >= timeout {
+                        return Err(persistence(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "timed out waiting for another wayle process to release the \
+                             runtime.toml lock",
+                        )));
+                    }
+
+                    if !announced && waited >= RUNTIME_LOCK_NOTICE_AFTER {
+                        warn!(
+                            path = %path.display(),
+                            "waiting for another wayle process to finish writing runtime.toml"
+                        );
+                        announced = true;
+                    }
+
+                    std::thread::sleep(RUNTIME_LOCK_POLL);
+                }
+                Err(TryLockError::Error(err)) => {
+                    warn!(
+                        error = %err,
+                        path = %path.display(),
+                        "cannot lock runtime.toml; continuing without the lock"
+                    );
+                    return Ok(Self { _file: file });
+                }
+            }
+        }
+    }
 }
 
 /// Reactive configuration service.
@@ -46,6 +118,10 @@ pub struct ConfigService {
     config: Arc<Config>,
     watcher: Arc<RwLock<Option<FileWatcher>>>,
     main_config_path: Arc<PathBuf>,
+    /// Runtime values as of the last load, reload or save, i.e. what this process believes
+    /// `runtime.toml` holds. Lets background saves skip when nothing changed locally, so a
+    /// reload never echoes a stale snapshot over another writer's newer file.
+    synced_runtime: Arc<Mutex<Option<toml::Value>>>,
 }
 
 impl ConfigService {
@@ -106,7 +182,9 @@ impl ConfigService {
             config: Arc::new(config),
             watcher: Arc::new(RwLock::new(None)),
             main_config_path: Arc::new(main_config_path),
+            synced_runtime: Arc::new(Mutex::new(None)),
         });
+        service.record_synced();
 
         let themes_dir = ConfigPaths::themes_dir();
         load_themes(&service.config, &themes_dir);
@@ -138,35 +216,43 @@ impl ConfigService {
     pub async fn lock_runtime() -> Result<RuntimeLock, Error> {
         let lock_path = Self::runtime_lock_path();
 
-        let file = tokio::task::spawn_blocking(move || -> Result<std::fs::File, Error> {
-            if let Some(parent) = lock_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|source| Error::Persistence {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
+        tokio::task::spawn_blocking(move || RuntimeLock::acquire(&lock_path, RUNTIME_LOCK_TIMEOUT))
+            .await
+            .map_err(|source| Error::TaskJoin { source })?
+    }
 
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(&lock_path)
-                .map_err(|source| Error::Persistence {
-                    path: lock_path.clone(),
-                    source,
-                })?;
+    /// Records the current runtime values as what `runtime.toml` holds.
+    pub(crate) fn record_synced(&self) {
+        let current = self.config.extract_runtime_values();
 
-            file.lock().map_err(|source| Error::Persistence {
-                path: lock_path.clone(),
-                source,
-            })?;
+        if let Ok(mut synced) = self.synced_runtime.lock() {
+            *synced = current;
+        }
+    }
 
-            Ok(file)
-        })
-        .await
-        .map_err(|source| Error::TaskJoin { source })??;
+    /// Saves like [`save`](Self::save), but only if the runtime values differ from what was
+    /// last loaded or saved. Returns whether it wrote.
+    ///
+    /// For background persistence, whose triggers include reloads of changes another process
+    /// made: those leave the values equal to disk, and writing them back would only risk
+    /// overwriting an even newer file.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if config cannot be serialized or written to disk.
+    pub async fn save_if_changed(&self) -> Result<bool, Error> {
+        let current = self.config.extract_runtime_values();
+        let unchanged = self
+            .synced_runtime
+            .lock()
+            .is_ok_and(|synced| *synced == current);
 
-        Ok(RuntimeLock { _file: file })
+        if unchanged {
+            return Ok(false);
+        }
+
+        self.save().await?;
+        Ok(true)
     }
 
     /// Reference to the config root.
@@ -191,7 +277,16 @@ impl ConfigService {
     ///
     /// Returns an error if `runtime.toml` exists but cannot be removed.
     pub fn reset_all_runtime(&self) -> Result<(), io::Error> {
+        // Held until the file is gone, so a concurrent `config set` cannot write back
+        // overrides that were loaded before this reset.
+        let _lock = RuntimeLock::acquire(&Self::runtime_lock_path(), RUNTIME_LOCK_TIMEOUT)
+            .map_err(|err| {
+                warn!(error = %err, "resetting runtime.toml without its lock");
+            })
+            .ok();
+
         self.config.clear_all_runtime();
+        self.record_synced();
 
         let runtime_path = ConfigPaths::runtime_config();
 
@@ -283,6 +378,7 @@ impl ConfigService {
                 source,
             })?;
 
+        self.record_synced();
         info!("Configuration saved to runtime.toml");
 
         Ok(())
@@ -397,5 +493,72 @@ impl ConfigServiceCli for ConfigService {
         self.config
             .clear_runtime_by_path(path)
             .map_err(Error::InvalidValue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_lock_path(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("wayle-lock-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("nested").join("runtime.lock")
+    }
+
+    #[test]
+    fn lock_times_out_while_another_guard_holds_it() {
+        let path = scratch_lock_path("timeout");
+        let _held = RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap();
+
+        let started = Instant::now();
+        let second = RuntimeLock::acquire(&path, Duration::from_millis(200));
+
+        let kind = match second {
+            Err(Error::Persistence { source, .. }) => Some(source.kind()),
+            _ => None,
+        };
+        assert_eq!(kind, Some(io::ErrorKind::TimedOut));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn lock_is_free_again_after_the_guard_drops() {
+        let path = scratch_lock_path("release");
+
+        drop(RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap());
+
+        assert!(RuntimeLock::acquire(&path, Duration::from_millis(200)).is_ok());
+    }
+
+    #[test]
+    fn lock_waits_for_a_holder_that_releases_in_time() {
+        let path = scratch_lock_path("handoff");
+        let held = RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap();
+
+        let waiter = {
+            let path = path.clone();
+            std::thread::spawn(move || RuntimeLock::acquire(&path, Duration::from_secs(5)).is_ok())
+        };
+
+        std::thread::sleep(Duration::from_millis(100));
+        drop(held);
+
+        assert!(waiter.join().unwrap());
+    }
+
+    #[tokio::test]
+    async fn save_if_changed_skips_when_nothing_differs_from_the_synced_values() {
+        let service = ConfigService {
+            config: Arc::new(Config::default()),
+            watcher: Arc::new(RwLock::new(None)),
+            main_config_path: Arc::new(PathBuf::from("unused.toml")),
+            synced_runtime: Arc::new(Mutex::new(None)),
+        };
+
+        // A default config has no runtime values and nothing was synced, so there is nothing
+        // to write (and this must not touch the real runtime.toml).
+        assert!(!service.save_if_changed().await.unwrap());
     }
 }

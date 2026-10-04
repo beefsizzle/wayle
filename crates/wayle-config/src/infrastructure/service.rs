@@ -31,6 +31,8 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// How long to wait for another process to release the runtime lock before giving up.
 const RUNTIME_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+/// `reset_all_runtime` runs on the settings app's UI thread, so it waits less.
+const RESET_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const RUNTIME_LOCK_POLL: Duration = Duration::from_millis(25);
 const RUNTIME_LOCK_NOTICE_AFTER: Duration = Duration::from_secs(1);
 
@@ -79,11 +81,9 @@ impl RuntimeLock {
                     let waited = started.elapsed();
 
                     if waited >= timeout {
-                        return Err(persistence(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "timed out waiting for another wayle process to release the \
-                             runtime.toml lock",
-                        )));
+                        return Err(Error::LockTimeout {
+                            path: path.to_path_buf(),
+                        });
                     }
 
                     if !announced && waited >= RUNTIME_LOCK_NOTICE_AFTER {
@@ -122,6 +122,9 @@ pub struct ConfigService {
     /// `runtime.toml` holds. Lets background saves skip when nothing changed locally, so a
     /// reload never echoes a stale snapshot over another writer's newer file.
     synced_runtime: Arc<Mutex<Option<toml::Value>>>,
+    /// Serializes reloads (which reset every runtime value before refilling it) against
+    /// persistence reading those values, so a save never sees a half-reloaded config.
+    reload_guard: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ConfigService {
@@ -183,6 +186,7 @@ impl ConfigService {
             watcher: Arc::new(RwLock::new(None)),
             main_config_path: Arc::new(main_config_path),
             synced_runtime: Arc::new(Mutex::new(None)),
+            reload_guard: Arc::new(tokio::sync::Mutex::new(())),
         });
         service.record_synced();
 
@@ -212,7 +216,9 @@ impl ConfigService {
     ///
     /// # Errors
     ///
-    /// Returns error if the lock file cannot be created or locked.
+    /// Returns error if the lock file cannot be created, or another process keeps holding the
+    /// lock past the timeout. A filesystem that cannot lock at all is not an error: this warns
+    /// and returns an unlocked guard.
     pub async fn lock_runtime() -> Result<RuntimeLock, Error> {
         let lock_path = Self::runtime_lock_path();
 
@@ -223,11 +229,32 @@ impl ConfigService {
 
     /// Records the current runtime values as what `runtime.toml` holds.
     pub(crate) fn record_synced(&self) {
+        self.set_synced(self.config.extract_runtime_values());
+    }
+
+    /// Records `values` as what `runtime.toml` holds.
+    ///
+    /// Callers pass the values they actually wrote or loaded rather than re-reading the config,
+    /// since another thread may have changed it since.
+    pub(crate) fn set_synced(&self, values: Option<toml::Value>) {
+        if let Ok(mut synced) = self.synced_runtime.lock() {
+            *synced = values;
+        }
+    }
+
+    /// Held by reloads and by saves, so persistence never reads a config in the middle of a
+    /// reload.
+    pub(crate) async fn reload_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.reload_guard.lock().await
+    }
+
+    /// Whether the runtime values differ from what was last loaded or saved.
+    pub(crate) fn needs_save(&self) -> bool {
         let current = self.config.extract_runtime_values();
 
-        if let Ok(mut synced) = self.synced_runtime.lock() {
-            *synced = current;
-        }
+        self.synced_runtime
+            .lock()
+            .is_ok_and(|synced| *synced != current)
     }
 
     /// Saves like [`save`](Self::save), but only if the runtime values differ from what was
@@ -241,17 +268,13 @@ impl ConfigService {
     ///
     /// Returns error if config cannot be serialized or written to disk.
     pub async fn save_if_changed(&self) -> Result<bool, Error> {
-        let current = self.config.extract_runtime_values();
-        let unchanged = self
-            .synced_runtime
-            .lock()
-            .is_ok_and(|synced| *synced == current);
+        let _reload = self.reload_guard().await;
 
-        if unchanged {
+        if !self.needs_save() {
             return Ok(false);
         }
 
-        self.save().await?;
+        self.save_unguarded().await?;
         Ok(true)
     }
 
@@ -279,7 +302,7 @@ impl ConfigService {
     pub fn reset_all_runtime(&self) -> Result<(), io::Error> {
         // Held until the file is gone, so a concurrent `config set` cannot write back
         // overrides that were loaded before this reset.
-        let _lock = RuntimeLock::acquire(&Self::runtime_lock_path(), RUNTIME_LOCK_TIMEOUT)
+        let _lock = RuntimeLock::acquire(&Self::runtime_lock_path(), RESET_LOCK_TIMEOUT)
             .map_err(|err| {
                 warn!(error = %err, "resetting runtime.toml without its lock");
             })
@@ -338,9 +361,15 @@ impl ConfigService {
     /// Returns error if config cannot be serialized or written to disk.
     #[instrument(skip(self))]
     pub async fn save(&self) -> Result<(), Error> {
-        let runtime_value = self
-            .config
-            .extract_runtime_values()
+        let _reload = self.reload_guard().await;
+        self.save_unguarded().await
+    }
+
+    /// `save` for callers already holding [`reload_guard`](Self::reload_guard).
+    async fn save_unguarded(&self) -> Result<(), Error> {
+        let extracted = self.config.extract_runtime_values();
+        let runtime_value = extracted
+            .clone()
             .unwrap_or_else(|| toml::Value::Table(toml::Table::new()));
 
         let runtime_path = ConfigPaths::runtime_config();
@@ -378,7 +407,8 @@ impl ConfigService {
                 source,
             })?;
 
-        self.record_synced();
+        // The values that were serialized, not whatever the config holds by now.
+        self.set_synced(extracted);
         info!("Configuration saved to runtime.toml");
 
         Ok(())
@@ -500,45 +530,74 @@ impl ConfigServiceCli for ConfigService {
 mod tests {
     use super::*;
 
-    fn scratch_lock_path(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("wayle-lock-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("nested").join("runtime.lock")
+    /// A fresh scratch dir path per test, removed again when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("wayle-lock-test-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+
+        fn lock_path(&self) -> PathBuf {
+            self.0.join("nested").join("runtime.lock")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn service() -> ConfigService {
+        ConfigService {
+            config: Arc::new(Config::default()),
+            watcher: Arc::new(RwLock::new(None)),
+            main_config_path: Arc::new(PathBuf::from("unused.toml")),
+            synced_runtime: Arc::new(Mutex::new(None)),
+            reload_guard: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    fn set_runtime(service: &ConfigService, scale: f64) {
+        let runtime = toml::toml! { [bar] scale = 0.0 };
+        let mut runtime = toml::Value::Table(runtime);
+        runtime["bar"]["scale"] = toml::Value::Float(scale);
+
+        service.config.apply_runtime_layer(&runtime, "").unwrap();
     }
 
     #[test]
     fn lock_times_out_while_another_guard_holds_it() {
-        let path = scratch_lock_path("timeout");
-        let _held = RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap();
+        let scratch = Scratch::new("timeout");
+        let _held = RuntimeLock::acquire(&scratch.lock_path(), Duration::from_secs(5)).unwrap();
 
         let started = Instant::now();
-        let second = RuntimeLock::acquire(&path, Duration::from_millis(200));
+        let second = RuntimeLock::acquire(&scratch.lock_path(), Duration::from_millis(200));
 
-        let kind = match second {
-            Err(Error::Persistence { source, .. }) => Some(source.kind()),
-            _ => None,
-        };
-        assert_eq!(kind, Some(io::ErrorKind::TimedOut));
+        assert!(matches!(second, Err(Error::LockTimeout { .. })));
         assert!(started.elapsed() >= Duration::from_millis(200));
     }
 
     #[test]
     fn lock_is_free_again_after_the_guard_drops() {
-        let path = scratch_lock_path("release");
+        let scratch = Scratch::new("release");
 
-        drop(RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap());
+        drop(RuntimeLock::acquire(&scratch.lock_path(), Duration::from_secs(5)).unwrap());
 
-        assert!(RuntimeLock::acquire(&path, Duration::from_millis(200)).is_ok());
+        assert!(RuntimeLock::acquire(&scratch.lock_path(), Duration::from_millis(200)).is_ok());
     }
 
     #[test]
     fn lock_waits_for_a_holder_that_releases_in_time() {
-        let path = scratch_lock_path("handoff");
-        let held = RuntimeLock::acquire(&path, Duration::from_secs(5)).unwrap();
+        let scratch = Scratch::new("handoff");
+        let held = RuntimeLock::acquire(&scratch.lock_path(), Duration::from_secs(5)).unwrap();
 
         let waiter = {
-            let path = path.clone();
+            let path = scratch.lock_path();
             std::thread::spawn(move || RuntimeLock::acquire(&path, Duration::from_secs(5)).is_ok())
         };
 
@@ -548,17 +607,52 @@ mod tests {
         assert!(waiter.join().unwrap());
     }
 
-    #[tokio::test]
-    async fn save_if_changed_skips_when_nothing_differs_from_the_synced_values() {
-        let service = ConfigService {
-            config: Arc::new(Config::default()),
-            watcher: Arc::new(RwLock::new(None)),
-            main_config_path: Arc::new(PathBuf::from("unused.toml")),
-            synced_runtime: Arc::new(Mutex::new(None)),
-        };
+    #[test]
+    fn nothing_to_save_for_a_default_config() {
+        assert!(!service().needs_save());
+    }
 
-        // A default config has no runtime values and nothing was synced, so there is nothing
-        // to write (and this must not touch the real runtime.toml).
-        assert!(!service.save_if_changed().await.unwrap());
+    #[test]
+    fn a_local_change_needs_saving() {
+        let service = service();
+
+        set_runtime(&service, 0.8);
+
+        assert!(service.needs_save());
+    }
+
+    #[test]
+    fn values_loaded_from_disk_do_not_need_saving_back() {
+        let service = service();
+
+        // What a reload does: values arrive from disk, then are recorded as synced.
+        set_runtime(&service, 0.8);
+        service.record_synced();
+
+        assert!(!service.needs_save());
+    }
+
+    #[test]
+    fn a_change_after_the_synced_snapshot_needs_saving() {
+        let service = service();
+        set_runtime(&service, 0.8);
+        service.record_synced();
+
+        set_runtime(&service, 0.9);
+
+        assert!(service.needs_save());
+    }
+
+    #[test]
+    fn recording_an_older_snapshot_keeps_a_newer_edit_pending() {
+        let service = service();
+        set_runtime(&service, 0.8);
+        let written = service.config.extract_runtime_values();
+
+        // An edit lands while that snapshot is being written; only the snapshot is recorded.
+        set_runtime(&service, 0.9);
+        service.set_synced(written);
+
+        assert!(service.needs_save());
     }
 }

@@ -88,6 +88,13 @@ pub enum Error {
         source: toml::ser::Error,
     },
 
+    /// Another process held the `runtime.toml` lock for too long.
+    #[error("timed out waiting for another wayle process to release the runtime lock '{}'", path.display())]
+    LockTimeout {
+        /// The lock file that stayed held.
+        path: PathBuf,
+    },
+
     /// Persistence operation failed.
     #[error("cannot persist config to '{}'", path.display())]
     Persistence {

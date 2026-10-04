@@ -12,8 +12,8 @@ use tracing::{debug, error, info, instrument};
 
 use super::{error::Error, paths::ConfigPaths, secrets, service::ConfigService};
 use crate::{
-    ApplyConfigLayer, ApplyRuntimeLayer, CommitConfigReload, Config, ResetConfigLayer,
-    ResetRuntimeLayer, infrastructure::themes::utils::load_themes,
+    ApplyConfigLayer, ApplyRuntimeLayer, CommitConfigReload, Config, ExtractRuntimeValues,
+    ResetConfigLayer, ResetRuntimeLayer, infrastructure::themes::utils::load_themes,
 };
 
 /// Hot-reloads configuration files on disk changes.
@@ -141,6 +141,7 @@ impl FileWatcher {
     }
 
     async fn reload_main_config(&self) -> Result<(), Error> {
+        let _reload = self.config_service.reload_guard().await;
         let config = self.config_service.config();
 
         let config_path = self.config_service.main_config_path().to_path_buf();
@@ -163,13 +164,15 @@ impl FileWatcher {
             let _ = config.apply_runtime_layer(&runtime_toml, "");
         }
 
+        let loaded = config.extract_runtime_values();
         config.commit_config_reload();
-        self.config_service.record_synced();
+        self.config_service.set_synced(loaded);
 
         Ok(())
     }
 
     async fn reload_runtime_only(&self) -> Result<(), Error> {
+        let _reload = self.config_service.reload_guard().await;
         let config = self.config_service.config();
         let runtime_path = ConfigPaths::runtime_config();
 
@@ -184,8 +187,9 @@ impl FileWatcher {
 
         config.reset_runtime_layer();
         let _ = config.apply_runtime_layer(&runtime_toml, "");
+        let loaded = config.extract_runtime_values();
         config.commit_config_reload();
-        self.config_service.record_synced();
+        self.config_service.set_synced(loaded);
 
         Ok(())
     }

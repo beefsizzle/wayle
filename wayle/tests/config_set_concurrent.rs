@@ -37,7 +37,7 @@ fn spawn_set(home: &Path, path: &str, value: &str) -> io::Result<Child> {
         .env("XDG_STATE_HOME", home.join("state"))
         .env("XDG_CACHE_HOME", home.join("cache"))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
 }
 
@@ -52,8 +52,13 @@ fn concurrent_config_set_keeps_every_value() -> Result<(), Box<dyn std::error::E
             .map(|(path, value)| spawn_set(&home, path, value))
             .collect::<Result<Vec<_>, _>>()?;
 
-        for mut child in children {
-            assert!(child.wait()?.success(), "a `wayle config set` failed");
+        for child in children {
+            let output = child.wait_with_output()?;
+            assert!(
+                output.status.success(),
+                "a `wayle config set` failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
         let runtime = fs::read_to_string(home.join("config/wayle/runtime.toml"))?;

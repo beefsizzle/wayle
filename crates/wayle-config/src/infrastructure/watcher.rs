@@ -101,18 +101,19 @@ impl FileWatcher {
     async fn reload_and_sync(&self, paths: &[PathBuf]) -> Result<(), Error> {
         let themes_dir = ConfigPaths::themes_dir();
         let runtime_path = ConfigPaths::runtime_config();
-        let runtime_tmp_path = runtime_path.with_extension("tmp");
+        let runtime_lock_path = ConfigService::runtime_lock_path();
 
         let is_env = |path: &PathBuf| secrets::is_env_file(path);
         let is_theme = |path: &PathBuf| path.starts_with(&themes_dir);
-        let is_runtime = |path: &PathBuf| path == &runtime_path || path == &runtime_tmp_path;
+        let is_runtime = |path: &PathBuf| is_runtime_file(path, &runtime_path);
+        let is_runtime_lock = |path: &PathBuf| path == &runtime_lock_path;
 
         let has_env_changes = paths.iter().any(is_env);
         let has_theme_changes = paths.iter().any(is_theme);
         let has_runtime_changes = paths.iter().any(is_runtime);
-        let has_main_config_changes = paths
-            .iter()
-            .any(|path| !is_env(path) && !is_theme(path) && !is_runtime(path));
+        let has_main_config_changes = paths.iter().any(|path| {
+            !is_env(path) && !is_theme(path) && !is_runtime(path) && !is_runtime_lock(path)
+        });
 
         if has_env_changes && let Ok(config_dir) = ConfigPaths::config_dir() {
             secrets::reload_env_files(&config_dir);
@@ -188,6 +189,19 @@ impl FileWatcher {
     }
 }
 
+/// Whether `path` is `runtime.toml` or one of the temp files a save writes beside it before
+/// renaming into place (`runtime.<pid>-<n>.tmp`, or the legacy `runtime.tmp`).
+fn is_runtime_file(path: &Path, runtime_path: &Path) -> bool {
+    if path == runtime_path {
+        return true;
+    }
+
+    let same_dir = path.parent() == runtime_path.parent();
+    let name = path.file_name().and_then(|name| name.to_str());
+
+    same_dir && name.is_some_and(|name| name.starts_with("runtime.") && name.ends_with(".tmp"))
+}
+
 /// Watches a `--config` override file that lives outside the (already
 /// recursively-watched) config dir, so it hot-reloads like the default.
 /// Watching its parent dir survives editor atomic-save/rename; failure is
@@ -249,4 +263,43 @@ async fn flush_pending(watcher: &FileWatcher, pending_paths: &mut Vec<PathBuf>) 
     }
 
     pending_paths.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_file_matches_runtime_toml_and_its_temp_files() {
+        let runtime = Path::new("/cfg/wayle/runtime.toml");
+
+        assert!(is_runtime_file(runtime, runtime));
+        assert!(is_runtime_file(
+            Path::new("/cfg/wayle/runtime.tmp"),
+            runtime
+        ));
+        assert!(is_runtime_file(
+            Path::new("/cfg/wayle/runtime.4242-7.tmp"),
+            runtime
+        ));
+    }
+
+    #[test]
+    fn runtime_file_rejects_other_files() {
+        let runtime = Path::new("/cfg/wayle/runtime.toml");
+
+        assert!(!is_runtime_file(
+            Path::new("/cfg/wayle/config.toml"),
+            runtime
+        ));
+        assert!(!is_runtime_file(
+            Path::new("/cfg/wayle/runtime.lock"),
+            runtime
+        ));
+        assert!(!is_runtime_file(Path::new("/cfg/wayle/other.tmp"), runtime));
+        assert!(!is_runtime_file(
+            Path::new("/cfg/wayle/themes/runtime.4242-7.tmp"),
+            runtime
+        ));
+    }
 }

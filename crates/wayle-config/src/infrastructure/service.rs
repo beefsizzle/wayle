@@ -1,7 +1,10 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use tokio::{
@@ -20,6 +23,19 @@ use crate::{
     ApplyConfigLayer, ApplyRuntimeLayer, ClearAllRuntime, ClearRuntimeByPath, CommitConfigReload,
     Config, ExtractRuntimeValues, infrastructure::themes::utils::load_themes,
 };
+
+/// Distinguishes temp files written by concurrent saves within one process.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Exclusive, cross-process lock over `runtime.toml`'s read-modify-write cycle.
+///
+/// Held from before the config is loaded until after it is saved, so concurrent writers (for
+/// example several `wayle config set` runs) apply one after another instead of each saving a
+/// snapshot that is missing the others' changes. Released on drop.
+#[derive(Debug)]
+pub struct RuntimeLock {
+    _file: std::fs::File,
+}
 
 /// Reactive configuration service.
 ///
@@ -106,6 +122,53 @@ impl ConfigService {
         Ok(service)
     }
 
+    /// Path of the lock file guarding `runtime.toml` read-modify-write cycles.
+    pub fn runtime_lock_path() -> PathBuf {
+        ConfigPaths::runtime_config().with_extension("lock")
+    }
+
+    /// Takes the exclusive lock over `runtime.toml`, waiting for other holders.
+    ///
+    /// Hold the returned guard across `load` and `save` whenever the result of a load is
+    /// written back, so no other writer's change is overwritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the lock file cannot be created or locked.
+    pub async fn lock_runtime() -> Result<RuntimeLock, Error> {
+        let lock_path = Self::runtime_lock_path();
+
+        let file = tokio::task::spawn_blocking(move || -> Result<std::fs::File, Error> {
+            if let Some(parent) = lock_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|source| Error::Persistence {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&lock_path)
+                .map_err(|source| Error::Persistence {
+                    path: lock_path.clone(),
+                    source,
+                })?;
+
+            file.lock().map_err(|source| Error::Persistence {
+                path: lock_path.clone(),
+                source,
+            })?;
+
+            Ok(file)
+        })
+        .await
+        .map_err(|source| Error::TaskJoin { source })??;
+
+        Ok(RuntimeLock { _file: file })
+    }
+
     /// Reference to the config root.
     pub fn config(&self) -> &Config {
         &self.config
@@ -186,7 +249,7 @@ impl ConfigService {
             .unwrap_or_else(|| toml::Value::Table(toml::Table::new()));
 
         let runtime_path = ConfigPaths::runtime_config();
-        let temp_path = runtime_path.with_extension("tmp");
+        let temp_path = Self::unique_temp_path(&runtime_path);
 
         let toml_str =
             toml::to_string_pretty(&runtime_value).map_err(|source| Error::Serialization {
@@ -194,33 +257,10 @@ impl ConfigService {
                 source,
             })?;
 
-        {
-            let mut file = File::create(&temp_path)
-                .await
-                .map_err(|source| Error::Persistence {
-                    path: temp_path.clone(),
-                    source,
-                })?;
-
-            file.write_all(toml_str.as_bytes())
-                .await
-                .map_err(|source| Error::Persistence {
-                    path: temp_path.clone(),
-                    source,
-                })?;
-
-            file.sync_all().await.map_err(|source| Error::Persistence {
-                path: temp_path.clone(),
-                source,
-            })?;
+        if let Err(err) = Self::write_and_replace(&temp_path, &runtime_path, &toml_str).await {
+            let _ = fs::remove_file(&temp_path).await;
+            return Err(err);
         }
-
-        fs::rename(&temp_path, &runtime_path)
-            .await
-            .map_err(|source| Error::Persistence {
-                path: runtime_path.clone(),
-                source,
-            })?;
 
         let dir_path = runtime_path.parent().ok_or_else(|| Error::Persistence {
             path: runtime_path.clone(),
@@ -246,6 +286,38 @@ impl ConfigService {
         info!("Configuration saved to runtime.toml");
 
         Ok(())
+    }
+
+    /// A temp path next to `runtime_path` that no other writer, in this or another process, uses.
+    pub(crate) fn unique_temp_path(runtime_path: &Path) -> PathBuf {
+        let sequence = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        runtime_path.with_extension(format!("{}-{sequence}.tmp", std::process::id()))
+    }
+
+    async fn write_and_replace(
+        temp_path: &Path,
+        runtime_path: &Path,
+        contents: &str,
+    ) -> Result<(), Error> {
+        let persistence = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| Error::Persistence { path, source }
+        };
+
+        let mut file = File::create(temp_path)
+            .await
+            .map_err(persistence(temp_path))?;
+
+        file.write_all(contents.as_bytes())
+            .await
+            .map_err(persistence(temp_path))?;
+
+        file.sync_all().await.map_err(persistence(temp_path))?;
+        drop(file);
+
+        fs::rename(temp_path, runtime_path)
+            .await
+            .map_err(persistence(runtime_path))
     }
 
     pub(crate) fn load_toml_file(path: &std::path::Path) -> Result<toml::Value, Error> {

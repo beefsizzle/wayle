@@ -9,6 +9,12 @@ use crate::{
 ///
 /// Returns error if config loading fails or the path is invalid.
 pub async fn execute(path: String) -> CliAction {
+    // Hold the lock across load and save so concurrent invocations apply one after another
+    // instead of each writing back a snapshot that lacks the others' changes.
+    let _runtime_lock = ConfigService::lock_runtime()
+        .await
+        .map_err(|e| format!("cannot lock runtime config: {e}"))?;
+
     let config_service = ConfigService::load(None)
         .await
         .map_err(|e| format!("cannot load config: {e}"))?;

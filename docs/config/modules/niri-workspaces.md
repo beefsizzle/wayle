@@ -61,9 +61,12 @@ workspaces. When `false`, all workspaces from every output are shown.
 
 ::: details More about `hide-trailing-empty`
 
-Niri keeps one empty workspace at the tail of every output for
-dynamic allocation. When `false`, it is shown like any other
-workspace. Named workspaces are always shown, empty or not.
+Niri keeps an empty workspace at the tail of every output for
+dynamic allocation (and one at the head with
+`empty-workspace-above-first`). When `true`, those unnamed empty
+workspaces are hidden unless one is currently active. When `false`,
+they are shown like any other workspace. Named workspaces are always
+shown, empty or not.
 
 :::
 

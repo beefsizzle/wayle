@@ -164,9 +164,12 @@ pub struct NiriWorkspacesConfig {
 
     /// Hide niri's auto-allocated trailing empty workspace.
     ///
-    /// Niri keeps one empty workspace at the tail of every output for
-    /// dynamic allocation. When `false`, it is shown like any other
-    /// workspace. Named workspaces are always shown, empty or not.
+    /// Niri keeps an empty workspace at the tail of every output for
+    /// dynamic allocation (and one at the head with
+    /// `empty-workspace-above-first`). When `true`, those unnamed empty
+    /// workspaces are hidden unless one is currently active. When `false`,
+    /// they are shown like any other workspace. Named workspaces are always
+    /// shown, empty or not.
     #[serde(rename = "hide-trailing-empty")]
     #[default(true)]
     pub hide_trailing_empty: ConfigProperty<bool>,

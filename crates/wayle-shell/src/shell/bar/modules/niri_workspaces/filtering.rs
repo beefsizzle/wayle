@@ -1,12 +1,15 @@
 //! Filter and order the workspace list for display.
 //!
-//! Niri only keeps an empty workspace around when it is the auto-allocated
-//! trailing one on an output or when it is named, so every workspace niri reports
-//! is shown, except the trailing empty one when `hide-trailing-empty` is on, ones
-//! on other monitors when `monitor-specific` is on, and `workspace-ignore` matches.
+//! Niri only keeps an empty workspace around when it is named or when it is one of
+//! the auto-allocated empty ones (the trailing one on each output, plus a leading one
+//! with `empty-workspace-above-first`), so every workspace niri reports is shown,
+//! except:
+//! - with `hide-trailing-empty`, auto-allocated ones: unnamed, empty and not active
+//!   (the active one stays so the bar always has an active indicator),
+//! - ones on other monitors when `monitor-specific` is on,
+//! - `workspace-ignore` matches.
+//!
 //! No placeholder workspaces are ever fabricated.
-
-use std::collections::HashMap;
 
 use super::helpers;
 
@@ -36,12 +39,6 @@ pub(super) fn collect_displayed(
     snapshots: Vec<WorkspaceSnapshot>,
     ctx: &FilterContext<'_>,
 ) -> Vec<WorkspaceSnapshot> {
-    let trailing_empty_ids = if ctx.hide_trailing_empty {
-        compute_trailing_empties(&snapshots)
-    } else {
-        Vec::new()
-    };
-
     let mut displayed: Vec<WorkspaceSnapshot> = snapshots
         .into_iter()
         .filter(|snapshot| visible_on_monitor(snapshot, ctx))
@@ -53,7 +50,7 @@ pub(super) fn collect_displayed(
                 ctx.ignore_patterns,
             )
         })
-        .filter(|snapshot| !trailing_empty_ids.contains(&snapshot.id))
+        .filter(|snapshot| !(ctx.hide_trailing_empty && is_auto_allocated(snapshot)))
         .collect();
 
     displayed.sort_by_key(sort_key);
@@ -73,40 +70,10 @@ fn visible_on_monitor(snapshot: &WorkspaceSnapshot, ctx: &FilterContext<'_>) -> 
         .is_some_and(|output| output == bar_monitor)
 }
 
-fn compute_trailing_empties(snapshots: &[WorkspaceSnapshot]) -> Vec<u64> {
-    let mut last_per_output: HashMap<String, OutputTail> = HashMap::new();
-
-    for snapshot in snapshots {
-        let Some(output) = snapshot.output.clone() else {
-            continue;
-        };
-        let candidate = OutputTail {
-            idx: snapshot.idx,
-            id: snapshot.id,
-            is_empty: !snapshot.has_windows,
-        };
-        last_per_output
-            .entry(output)
-            .and_modify(|tail| {
-                if candidate.idx > tail.idx {
-                    *tail = candidate.clone();
-                }
-            })
-            .or_insert(candidate);
-    }
-
-    last_per_output
-        .into_values()
-        .filter(|tail| tail.is_empty)
-        .map(|tail| tail.id)
-        .collect()
-}
-
-#[derive(Clone)]
-struct OutputTail {
-    idx: u8,
-    id: u64,
-    is_empty: bool,
+/// An unnamed, empty, inactive workspace is one niri allocated on its own: it removes such
+/// workspaces as soon as they are left, except the ones it keeps at the edges.
+fn is_auto_allocated(snapshot: &WorkspaceSnapshot) -> bool {
+    snapshot.name.is_none() && !snapshot.has_windows && !snapshot.is_active
 }
 
 fn sort_key(snapshot: &WorkspaceSnapshot) -> (String, u8) {
@@ -269,6 +236,56 @@ mod tests {
         let patterns = vec![String::from("scratch")];
         let ctx = FilterContext {
             ignore_patterns: &patterns,
+            ..ctx_default()
+        };
+        let displayed = collect_displayed(snapshots, &ctx);
+        assert_eq!(ids(&displayed), vec![1, 2]);
+    }
+
+    #[test]
+    fn active_trailing_empty_workspace_stays_visible_when_hiding_trailing_empty() {
+        let snapshots = vec![occupied(1, 1, "DP-1"), active_empty(2, 2, "DP-1")];
+        let ctx = FilterContext {
+            hide_trailing_empty: true,
+            ..ctx_default()
+        };
+        let displayed = collect_displayed(snapshots, &ctx);
+        assert_eq!(ids(&displayed), vec![1, 2]);
+    }
+
+    #[test]
+    fn monitor_with_only_its_active_empty_workspace_still_shows_it() {
+        let snapshots = vec![occupied(1, 1, "DP-1"), active_empty(2, 1, "DP-2")];
+        let ctx = FilterContext {
+            monitor_specific: true,
+            bar_monitor: Some("DP-2"),
+            hide_trailing_empty: true,
+            ..ctx_default()
+        };
+        let displayed = collect_displayed(snapshots, &ctx);
+        assert_eq!(ids(&displayed), vec![2]);
+    }
+
+    #[test]
+    fn leading_empty_workspace_from_empty_workspace_above_first_is_hidden() {
+        let snapshots = vec![
+            empty(1, 1, "DP-1"),
+            occupied(2, 2, "DP-1"),
+            empty(3, 3, "DP-1"),
+        ];
+        let ctx = FilterContext {
+            hide_trailing_empty: true,
+            ..ctx_default()
+        };
+        let displayed = collect_displayed(snapshots, &ctx);
+        assert_eq!(ids(&displayed), vec![2]);
+    }
+
+    #[test]
+    fn named_workspace_is_never_treated_as_auto_allocated() {
+        let snapshots = vec![occupied(1, 1, "DP-1"), named_empty(2, 2, "DP-1", "chat")];
+        let ctx = FilterContext {
+            hide_trailing_empty: true,
             ..ctx_default()
         };
         let displayed = collect_displayed(snapshots, &ctx);

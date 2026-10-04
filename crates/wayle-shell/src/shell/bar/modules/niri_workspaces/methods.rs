@@ -74,7 +74,9 @@ impl NiriWorkspaces {
                 is_urgent: workspace.is_urgent.get(),
                 is_active: workspace.is_active.get(),
                 is_focused: workspace.is_focused.get(),
-                has_windows: workspace.active_window_id.get().is_some(),
+                has_windows: windows
+                    .values()
+                    .any(|window| window.workspace_id.get() == Some(workspace.id.get())),
             })
             .collect();
         let displayed = filtering::collect_displayed(snapshots, &ctx);

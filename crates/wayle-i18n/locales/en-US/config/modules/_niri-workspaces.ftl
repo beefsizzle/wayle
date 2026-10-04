@@ -2,9 +2,6 @@
 
 ## Niri Workspaces Module Configuration
 
-settings-modules-niri-workspaces-min-workspace-count = Minimum Workspaces
-    .description = Always show numerically-named workspaces up to this index, even when empty
-
 settings-modules-niri-workspaces-monitor-specific = Monitor Specific
     .description = Show only workspaces on this monitor
 

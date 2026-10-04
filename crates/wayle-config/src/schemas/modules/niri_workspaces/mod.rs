@@ -8,7 +8,7 @@ use wayle_derive::{wayle_config, wayle_enum};
 
 use super::{ActiveIndicator, DisplayMode, UrgentMode, WorkspaceStyle};
 use crate::{
-    ConfigProperty,
+    ConfigProperty, Removed,
     docs::{ConfigGroup, GroupDefaults, ModuleInfo, ModuleInfoProvider},
     schemas::styling::{ColorValue, CssToken, ScaleFactor, Spacing},
 };
@@ -154,17 +154,6 @@ impl<'a> IntoIterator for &'a WorkspaceMap {
 /// Niri workspace indicators with click-to-switch.
 #[wayle_config(i18n_prefix = "settings-modules-niri-workspaces")]
 pub struct NiriWorkspacesConfig {
-    /// Always-visible ceiling for numerically-named workspaces.
-    ///
-    /// Workspaces whose name parses to an integer at or below this value
-    /// stay visible even when empty. Workspaces with non-numeric names
-    /// and those above the ceiling follow the normal empty/occupied
-    /// filtering. When `0` (default), no extra workspaces are forced
-    /// visible.
-    #[serde(rename = "min-workspace-count")]
-    #[default(0)]
-    pub min_workspace_count: ConfigProperty<u8>,
-
     /// Show only workspaces on this bar's monitor.
     ///
     /// When `true` (default), each bar shows only its own output's
@@ -176,7 +165,8 @@ pub struct NiriWorkspacesConfig {
     /// Hide niri's auto-allocated trailing empty workspace.
     ///
     /// Niri keeps one empty workspace at the tail of every output for
-    /// dynamic allocation.
+    /// dynamic allocation. When `false`, it is shown like any other
+    /// workspace. Named workspaces are always shown, empty or not.
     #[serde(rename = "hide-trailing-empty")]
     #[default(true)]
     pub hide_trailing_empty: ConfigProperty<bool>,
@@ -367,6 +357,16 @@ pub struct NiriWorkspacesConfig {
     #[serde(rename = "scroll-down")]
     #[default(WorkspaceClickAction::FocusNext)]
     pub scroll_down: ConfigProperty<WorkspaceClickAction>,
+
+    /// REMOVED: niri allocates workspaces dynamically and always shows named
+    /// ones. A stale `min-workspace-count` still in a config warns at load; it
+    /// has no effect.
+    #[wayle(deprecated(
+        "niri allocates workspaces dynamically; named workspaces are always shown"
+    ))]
+    #[serde(rename = "min-workspace-count", skip_serializing)]
+    #[schemars(skip)]
+    pub min_workspace_count: Removed<u8>,
 }
 
 impl ModuleInfoProvider for NiriWorkspacesConfig {

@@ -2,9 +2,6 @@
 
 ## Configuration du module Espaces de travail Niri
 
-settings-modules-niri-workspaces-min-workspace-count = Espaces de travail minimum
-    .description = Toujours afficher les espaces de travail numérotés jusqu'à cet indice, même vides
-
 settings-modules-niri-workspaces-monitor-specific = Spécifique au moniteur
     .description = Afficher uniquement les espaces de travail de ce moniteur
 

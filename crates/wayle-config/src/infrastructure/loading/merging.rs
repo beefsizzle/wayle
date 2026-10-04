@@ -1,5 +1,11 @@
 use toml::{Value, map::Map};
 
+/// Config paths whose arrays are concatenated across files instead of replaced.
+///
+/// `[[modules.custom]]` is a list of independent entries, so each imported file contributes
+/// its own. Every other array follows the usual rule: the later file wins.
+const CONCATENATED_ARRAYS: &[&[&str]] = &[&["modules", "custom"]];
+
 pub(super) fn merge_toml_configs(imports: Vec<Value>, main: Value) -> Value {
     let mut accumulated = Value::Table(Map::new());
 
@@ -10,7 +16,17 @@ pub(super) fn merge_toml_configs(imports: Vec<Value>, main: Value) -> Value {
     merge_two_toml_configs(accumulated, main)
 }
 
+fn is_concatenated(path: &[String]) -> bool {
+    CONCATENATED_ARRAYS
+        .iter()
+        .any(|known| known.iter().copied().eq(path.iter().map(String::as_str)))
+}
+
 fn merge_two_toml_configs(base: Value, overlay: Value) -> Value {
+    merge_at(base, overlay, &mut Vec::new())
+}
+
+fn merge_at(base: Value, overlay: Value, path: &mut Vec<String>) -> Value {
     match (base, overlay) {
         (Value::Table(base_table), Value::Table(overlay_table)) => {
             let mut merged_table = overlay_table;
@@ -21,13 +37,19 @@ fn merge_two_toml_configs(base: Value, overlay: Value) -> Value {
                         merged_table.insert(key, base_value);
                     }
                     Some(overlay_value) => {
-                        let merged_value = merge_two_toml_configs(base_value, overlay_value);
+                        path.push(key.clone());
+                        let merged_value = merge_at(base_value, overlay_value, path);
+                        path.pop();
                         merged_table.insert(key, merged_value);
                     }
                 }
             }
 
             Value::Table(merged_table)
+        }
+        (Value::Array(mut base_array), Value::Array(overlay_array)) if is_concatenated(path) => {
+            base_array.extend(overlay_array);
+            Value::Array(base_array)
         }
         (_, overlay) => overlay,
     }
@@ -134,6 +156,89 @@ mod tests {
 
     mod merge_toml_configs {
         use super::*;
+
+        fn custom_ids(value: &Value) -> Vec<&str> {
+            value["modules"]["custom"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["id"].as_str().unwrap())
+                .collect()
+        }
+
+        #[test]
+        fn custom_modules_from_separate_imports_are_all_kept() {
+            let import_a = toml::toml! {
+                [[modules.custom]]
+                id = "module-a"
+            };
+            let import_b = toml::toml! {
+                [[modules.custom]]
+                id = "module-b"
+            };
+            let main = toml::toml! {
+                [[modules.custom]]
+                id = "main"
+            };
+
+            let result = merge_toml_configs(
+                vec![Value::Table(import_a), Value::Table(import_b)],
+                Value::Table(main),
+            );
+
+            assert_eq!(custom_ids(&result), vec!["module-a", "module-b", "main"]);
+        }
+
+        #[test]
+        fn custom_modules_survive_when_only_one_file_defines_them() {
+            let import_a = toml::toml! {
+                [[modules.custom]]
+                id = "module-a"
+            };
+            let main = toml::toml! {
+                [modules.clock]
+                format = "%H:%M"
+            };
+
+            let result = merge_toml_configs(vec![Value::Table(import_a)], Value::Table(main));
+
+            assert_eq!(custom_ids(&result), vec!["module-a"]);
+            assert_eq!(result["modules"]["clock"]["format"].as_str(), Some("%H:%M"));
+        }
+
+        #[test]
+        fn other_arrays_are_still_replaced_by_the_later_file() {
+            let import_a = toml::toml! {
+                [[bar.layout]]
+                monitor = "A"
+            };
+            let main = toml::toml! {
+                [[bar.layout]]
+                monitor = "B"
+            };
+
+            let result = merge_toml_configs(vec![Value::Table(import_a)], Value::Table(main));
+            let layouts = result["bar"]["layout"].as_array().unwrap();
+
+            assert_eq!(layouts.len(), 1);
+            assert_eq!(layouts[0]["monitor"].as_str(), Some("B"));
+        }
+
+        #[test]
+        fn arrays_named_custom_elsewhere_are_not_concatenated() {
+            let import_a = toml::toml! {
+                [other]
+                custom = [1]
+            };
+            let main = toml::toml! {
+                [other]
+                custom = [2]
+            };
+
+            let result = merge_toml_configs(vec![Value::Table(import_a)], Value::Table(main));
+
+            assert_eq!(result["other"]["custom"].as_array().unwrap().len(), 1);
+        }
 
         #[test]
         fn main_config_takes_precedence() {

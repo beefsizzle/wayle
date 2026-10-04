@@ -45,7 +45,7 @@ right = ["niri-workspaces"]
 | `container-bg-color` | [`ColorValue`](/config/types#color-value) | `"bg-surface-elevated"` | Background color for the workspaces container. |
 | `border-show` | bool | `false` | Display border around the workspaces container. |
 | `border-color` | [`ColorValue`](/config/types#color-value) | `"border-default"` | Border color for the workspaces container. |
-| `workspace-map` | [`WorkspaceMap`](/config/types#workspace-map) | `{}` | Per-workspace icon and color overrides, keyed by name or id-as-string. |
+| `workspace-map` | [`NiriWorkspaceMap`](/config/types#niri-workspace-map) | `{}` | Per-workspace icon and color overrides, keyed by name or id-as-string. |
 | `app-icon-map` | map of string | `{}` | Application icon mapping with glob pattern support. |
 | `left-click` | [`WorkspaceClickAction`](/config/types#workspace-click-action) | `"focus:this"` | Action on left click. |
 | `middle-click` | [`WorkspaceClickAction`](/config/types#workspace-click-action) | `""` | Action on middle click. |

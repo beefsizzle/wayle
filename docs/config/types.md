@@ -459,6 +459,29 @@ Per-monitor wallpaper configuration.
 | `fit-mode` | Image scaling mode for this monitor. |
 | `wallpaper` | Wallpaper image path for this monitor. |
 
+## NiriWorkspaceMap {#niri-workspace-map}
+
+Per-workspace icon and color overrides, keyed by workspace name or id-as-string.
+
+Lookup tries the name first, then the id as a string. Workspaces that
+match neither fall back to the defaults set by
+[`NiriWorkspacesConfig::display_mode`] and the active/occupied/empty
+color knobs.
+
+### Example
+
+```toml
+[modules.niri-workspaces.workspace-map]
+web = { label = "Web", icon = "ld-globe-symbolic", color = "#4a90d9" }
+terminal = { icon = "ld-terminal-symbolic" }
+
+# Or target by stable id when no name is set
+[modules.niri-workspaces.workspace-map.5]
+label = "Code"
+icon = "ld-code-symbolic"
+color = "accent"
+```
+
 ## NormalizedF64 {#normalized-f64}
 
 Floating-point value clamped to 0.0-1.0.

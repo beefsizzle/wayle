@@ -131,7 +131,7 @@ impl JsonSchema for WorkspaceClickAction {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
-#[schemars(transparent)]
+#[schemars(rename = "NiriWorkspaceMap")]
 pub struct WorkspaceMap(BTreeMap<String, WorkspaceStyle>);
 
 impl Deref for WorkspaceMap {

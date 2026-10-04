@@ -16,6 +16,29 @@ pub(super) fn merge_toml_configs(imports: Vec<Value>, main: Value) -> Value {
     merge_two_toml_configs(accumulated, main)
 }
 
+/// Appends `overlay` entries to `base`. An overlay entry whose `id` matches a base entry
+/// replaces it in place, so redefining a module in a later file overrides the earlier
+/// definition instead of being shadowed by it (consumers take the first entry for an id).
+fn concat_entries(mut base: Vec<Value>, overlay: Vec<Value>) -> Vec<Value> {
+    for entry in overlay {
+        let existing = entry_id(&entry).and_then(|id| {
+            base.iter()
+                .position(|candidate| entry_id(candidate) == Some(id))
+        });
+
+        match existing {
+            Some(index) => base[index] = entry,
+            None => base.push(entry),
+        }
+    }
+
+    base
+}
+
+fn entry_id(entry: &Value) -> Option<&str> {
+    entry.get("id")?.as_str()
+}
+
 fn is_concatenated(path: &[String]) -> bool {
     CONCATENATED_ARRAYS
         .iter()
@@ -47,9 +70,8 @@ fn merge_at(base: Value, overlay: Value, path: &mut Vec<String>) -> Value {
 
             Value::Table(merged_table)
         }
-        (Value::Array(mut base_array), Value::Array(overlay_array)) if is_concatenated(path) => {
-            base_array.extend(overlay_array);
-            Value::Array(base_array)
+        (Value::Array(base_array), Value::Array(overlay_array)) if is_concatenated(path) => {
+            Value::Array(concat_entries(base_array, overlay_array))
         }
         (_, overlay) => overlay,
     }
@@ -187,6 +209,65 @@ mod tests {
             );
 
             assert_eq!(custom_ids(&result), vec!["module-a", "module-b", "main"]);
+        }
+
+        fn custom_entries(value: &Value) -> Vec<(&str, Option<&str>)> {
+            value["modules"]["custom"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    (
+                        entry["id"].as_str().unwrap(),
+                        entry.get("command").and_then(Value::as_str),
+                    )
+                })
+                .collect()
+        }
+
+        #[test]
+        fn later_file_overrides_an_earlier_custom_module_with_the_same_id() {
+            let import_a = toml::toml! {
+                [[modules.custom]]
+                id = "shared"
+                command = "from-import"
+                [[modules.custom]]
+                id = "only-import"
+            };
+            let main = toml::toml! {
+                [[modules.custom]]
+                id = "shared"
+                command = "from-main"
+                [[modules.custom]]
+                id = "only-main"
+            };
+
+            let result = merge_toml_configs(vec![Value::Table(import_a)], Value::Table(main));
+
+            assert_eq!(
+                custom_entries(&result),
+                vec![
+                    ("shared", Some("from-main")),
+                    ("only-import", None),
+                    ("only-main", None),
+                ]
+            );
+        }
+
+        #[test]
+        fn entries_without_an_id_are_never_deduplicated() {
+            let import_a = toml::toml! {
+                [[modules.custom]]
+                command = "a"
+            };
+            let main = toml::toml! {
+                [[modules.custom]]
+                command = "b"
+            };
+
+            let result = merge_toml_configs(vec![Value::Table(import_a)], Value::Table(main));
+
+            assert_eq!(result["modules"]["custom"].as_array().unwrap().len(), 2);
         }
 
         #[test]

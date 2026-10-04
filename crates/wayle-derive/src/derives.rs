@@ -130,8 +130,9 @@ pub fn apply_config_layer(input: TokenStream) -> TokenStream {
 }
 
 /// Generates `ApplyRuntimeLayer`. Works like [`apply_config_layer`] but for
-/// runtime.toml (GUI overrides). Returns `Err` if a field rejects the value,
-/// so bad overrides get caught before they propagate.
+/// runtime.toml (GUI overrides). Every field is applied even when an earlier one rejects its
+/// value, since `runtime.toml` is rewritten from memory on save and anything skipped here would
+/// be dropped from disk. Returns the first rejection as `Err` so callers can still report it.
 pub fn apply_runtime_layer(input: TokenStream) -> TokenStream {
     let derive_input = parse_macro_input!(input as DeriveInput);
     let struct_name = &derive_input.ident;
@@ -149,17 +150,24 @@ pub fn apply_runtime_layer(input: TokenStream) -> TokenStream {
             let field_ident = &field.ident;
             lookup_loop(
                 field,
-                quote! { self.#field_ident.apply_runtime_layer(field_value, &child_path)?; },
+                quote! {
+                    if let Err(err) = self.#field_ident.apply_runtime_layer(field_value, &child_path) {
+                        first_error.get_or_insert(err);
+                    }
+                },
             )
         });
 
     let generated = quote! {
         impl wayle_config::ApplyRuntimeLayer for #struct_name {
             fn apply_runtime_layer(&self, value: &toml::Value, path: &str) -> Result<(), String> {
+                let mut first_error: Option<String> = None;
+
                 if let toml::Value::Table(table) = value {
                     #(#field_updates)*
                 }
-                Ok(())
+
+                first_error.map_or(Ok(()), Err)
             }
         }
     };

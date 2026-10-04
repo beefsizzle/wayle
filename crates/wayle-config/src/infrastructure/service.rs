@@ -274,7 +274,9 @@ impl ConfigService {
 /// Warns once about `config.toml` values that `runtime.toml` currently overrides, so an edit
 /// that has no effect is not a silent surprise.
 fn warn_about_shadowed_keys(config_toml: &toml::Value, runtime_toml: &toml::Value) {
-    let keys = shadowed_keys(config_toml, runtime_toml);
+    let defaults = toml::Value::try_from(Config::default())
+        .unwrap_or_else(|_| toml::Value::Table(toml::Table::new()));
+    let keys = shadowed_keys(config_toml, runtime_toml, &defaults);
 
     if keys.is_empty() {
         return;

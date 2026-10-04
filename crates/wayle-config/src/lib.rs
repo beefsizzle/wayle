@@ -56,6 +56,8 @@ pub mod infrastructure {
     pub mod secrets;
     /// Configuration service
     pub mod service;
+    /// Detects runtime.toml values that override config.toml
+    pub(crate) mod shadowing;
     /// Wayle theme management and discovery
     pub mod themes;
     /// TOML path utilities

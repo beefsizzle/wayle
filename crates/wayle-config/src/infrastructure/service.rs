@@ -13,7 +13,9 @@ use tracing::{info, instrument, warn};
 use super::{
     error::{Error, InvalidFieldReason, IoOperation},
     paths::ConfigPaths,
-    secrets, toml_path,
+    secrets,
+    shadowing::shadowed_keys,
+    toml_path,
     watcher::FileWatcher,
 };
 use crate::{
@@ -59,15 +61,19 @@ impl ConfigService {
                 .await
                 .map_err(|source| Error::TaskJoin { source })?;
 
-        match config_result {
+        let config_toml = match config_result {
             Ok(config_toml) => {
                 // Removed/renamed keys still present are warned about by the derived
                 // `apply_config_layer` (from `#[wayle(deprecated(...))]` /
                 // `#[wayle(deprecated_alias)]` on the schema fields themselves).
                 config.apply_config_layer(&config_toml, "");
+                Some(config_toml)
             }
-            Err(e) => warn!("using defaults, config.toml failed:\n{e}"),
-        }
+            Err(e) => {
+                warn!("using defaults, config.toml failed:\n{e}");
+                None
+            }
+        };
 
         let runtime_path = ConfigPaths::runtime_config();
         let runtime_result =
@@ -79,6 +85,9 @@ impl ConfigService {
             Ok(runtime_toml) => {
                 if let Err(e) = config.apply_runtime_layer(&runtime_toml, "") {
                     warn!("invalid runtime.toml value:\n{e}");
+                }
+                if let Some(config_toml) = &config_toml {
+                    warn_about_shadowed_keys(config_toml, &runtime_toml);
                 }
             }
             Err(e) => warn!("runtime.toml failed:\n{e}"),
@@ -260,6 +269,23 @@ impl ConfigService {
             source,
         })
     }
+}
+
+/// Warns once about `config.toml` values that `runtime.toml` currently overrides, so an edit
+/// that has no effect is not a silent surprise.
+fn warn_about_shadowed_keys(config_toml: &toml::Value, runtime_toml: &toml::Value) {
+    let keys = shadowed_keys(config_toml, runtime_toml);
+
+    if keys.is_empty() {
+        return;
+    }
+
+    warn!(
+        count = keys.len(),
+        keys = %keys.join(", "),
+        "runtime.toml overrides config.toml for these keys; \
+         run `wayle config reset <key>` to use the config.toml value"
+    );
 }
 
 /// CLI extension for string-based config access.

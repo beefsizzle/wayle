@@ -76,6 +76,10 @@ impl Component for SettingsApp {
     view! {
         gtk::Window {
             set_title: Some(&t("settings-title")),
+            // The window supplies its own close button (see `window.rs`). Without this,
+            // compositors that let clients draw their own decorations (niri by default) also
+            // get GTK's titlebar with a second close button.
+            set_decorated: false,
             add_css_class: "settings-window",
             set_default_size: (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
 

@@ -131,7 +131,7 @@ $base-btn-gap: 0.5rem;
     --font-mono: var(--cfg-font-mono);
 
     // Border radius (global scale)
-    --radius-none: 0;
+    --radius-none: 0px;
     --radius-sm: calc(#{$base-radius-sm} * var(--global-scale));
     --radius-md: calc(#{$base-radius-md} * var(--global-scale));
     --radius-lg: calc(#{$base-radius-lg} * var(--global-scale));

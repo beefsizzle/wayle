@@ -10,6 +10,8 @@ mod user_session;
 mod watchers;
 
 use std::{
+    env,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
 };
@@ -33,8 +35,28 @@ use crate::{i18n::t, shell::bar::dropdowns::scaled_dimension};
 
 const BASE_WIDTH: f32 = 380.0;
 
+const SETTINGS_BINARY: &str = "wayle-settings";
+
+/// Resolves the settings binary: the one next to the running executable if there is one, else
+/// whatever `$PATH` provides.
+///
+/// A shell started by absolute path (a development build, a custom install) is usually not on
+/// `$PATH` alongside its settings app, and a different `wayle-settings` found on `$PATH` may not
+/// match this build's config schema.
+fn resolve_settings_binary(
+    current_exe: Option<PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    current_exe
+        .and_then(|exe| exe.parent().map(|dir| dir.join(SETTINGS_BINARY)))
+        .filter(|path| exists(path))
+        .unwrap_or_else(|| PathBuf::from(SETTINGS_BINARY))
+}
+
 fn spawn_settings_app() {
-    match Command::new("wayle-settings")
+    let binary = resolve_settings_binary(env::current_exe().ok(), Path::is_file);
+
+    match Command::new(binary)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -280,5 +302,39 @@ impl Component for DashboardDropdown {
                 self.scaled_width = scaled_dimension(BASE_WIDTH, scale);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefers_the_binary_next_to_the_running_executable() {
+        let exe = Some(PathBuf::from("/opt/wayle/bin/wayle"));
+
+        let resolved = resolve_settings_binary(exe, |path| {
+            path == Path::new("/opt/wayle/bin/wayle-settings")
+        });
+
+        assert_eq!(resolved, PathBuf::from("/opt/wayle/bin/wayle-settings"));
+    }
+
+    #[test]
+    fn falls_back_to_path_when_there_is_no_sibling() {
+        let exe = Some(PathBuf::from("/opt/wayle/bin/wayle"));
+
+        assert_eq!(
+            resolve_settings_binary(exe, |_| false),
+            PathBuf::from("wayle-settings")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_path_when_the_executable_path_is_unknown() {
+        assert_eq!(
+            resolve_settings_binary(None, |_| true),
+            PathBuf::from("wayle-settings")
+        );
     }
 }

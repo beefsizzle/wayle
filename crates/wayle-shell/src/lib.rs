@@ -3,7 +3,7 @@
 use std::{env, error::Error, path::PathBuf};
 
 use relm4::RelmApp;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Builder, Runtime};
 use tracing::info;
 
 mod bootstrap;
@@ -20,6 +20,26 @@ mod wallpaper_map;
 mod watchers;
 
 use shell::{Shell, ShellInit};
+
+/// Worker threads for the shell's tokio runtime.
+///
+/// Tokio defaults to one worker per core (16 on a typical desktop), but the shell's async work is
+/// D-Bus traffic and file watching while GTK owns the main thread. Override with
+/// `TOKIO_WORKER_THREADS`.
+const DEFAULT_WORKER_THREADS: usize = 4;
+
+fn build_runtime() -> std::io::Result<Runtime> {
+    let workers = env::var("TOKIO_WORKER_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|workers| *workers > 0)
+        .unwrap_or(DEFAULT_WORKER_THREADS);
+
+    Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+}
 
 /// Caps glibc's per-thread malloc arenas at two.
 ///
@@ -70,7 +90,7 @@ pub fn run(config_override: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     tracing_init::init()?;
     info!("Wayle shell starting");
 
-    let runtime = Runtime::new()?;
+    let runtime = build_runtime()?;
     let _guard = runtime.enter();
 
     if runtime.block_on(bootstrap::is_already_running()) {

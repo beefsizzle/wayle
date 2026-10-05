@@ -81,7 +81,9 @@ pub(crate) fn rounded_rect(rect: Rect, radius: CornerRadius) -> Vec<Rect> {
         CornerRadius::Full => half_short_side,
         CornerRadius::Px(px) => px.clamp(0.0, half_short_side),
     };
-    let band = radius.ceil() as i32;
+    // At most half the height: with an odd height a full-radius band would otherwise run past
+    // the middle and the top and bottom corner rows would overlap.
+    let band = (radius.ceil() as i32).min(rect.height / 2);
     if band == 0 {
         return vec![rect];
     }
@@ -321,6 +323,33 @@ mod tests {
         // reach the full width.
         assert!(full.len() > 10, "{full:?}");
         assert!(full[0].x > r.x + 5);
+    }
+
+    #[test]
+    fn odd_heights_never_overlap_rows() {
+        // A 47 px pill used to send two overlapping rows around its middle.
+        for height in [1, 2, 3, 5, 31, 47, 48] {
+            for radius in [
+                CornerRadius::Full,
+                CornerRadius::Px(7.5),
+                CornerRadius::Px(100.0),
+            ] {
+                let r = rect(8, 7, 1241, height);
+                assert_well_formed(&rounded_rect(r, radius), r);
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_radii_stay_well_formed_and_symmetric() {
+        for radius in [0.4, 0.5, 1.5, 6.25, 11.75] {
+            let r = rect(0, 0, 200, 33);
+            let rows = rounded_rect(r, CornerRadius::Px(radius));
+            assert_well_formed(&rows, r);
+            let widths: Vec<i32> = rows.iter().map(|row| row.width).collect();
+            let mirrored: Vec<i32> = widths.iter().rev().copied().collect();
+            assert_eq!(widths, mirrored, "radius {radius}: {rows:?}");
+        }
     }
 
     #[test]

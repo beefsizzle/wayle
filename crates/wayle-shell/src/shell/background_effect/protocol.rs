@@ -6,7 +6,8 @@
 //! connection per `GdkDisplay`) and put every object we create on a private
 //! event queue, so GDK never sees our events and we never dispatch its. The
 //! only events we receive are the registry globals and the manager's
-//! `capabilities`; both are read with one blocking round trip at first use.
+//! `capabilities`; they are read with two blocking round trips (the registry,
+//! then the manager) at first use.
 //!
 //! Requests go into the connection's shared output buffer in call order, so a
 //! `set_blur_region` sent before GDK's next `wl_surface.commit` is applied by
@@ -21,7 +22,7 @@ use std::{
 
 use gdk4_wayland::{WaylandDisplay, WaylandSurface, prelude::WaylandSurfaceExtManual};
 use relm4::gtk::{gdk, glib::object::ObjectExt, prelude::*};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     globals::{BindError, GlobalListContents, registry_queue_init},
@@ -229,7 +230,7 @@ impl BackgroundEffects {
         }
         let key = surface_key(surface);
         if self.attached.borrow().contains(&key) {
-            warn!("surface already has a background effect; not creating another");
+            debug!("surface already has a background effect; not creating another");
             return None;
         }
 

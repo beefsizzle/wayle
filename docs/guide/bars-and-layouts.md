@@ -97,7 +97,11 @@ dropdown-blur = true
 
 The request goes through the standard [`ext-background-effect-v1`](https://wayland.app/protocols/ext-background-effect-v1) Wayland protocol, and wayle sends the exact visible shape: the bar itself (following `rounding`, without the `inset-edge`/`inset-ends` gap around it) and each dropdown card (without its transparent margin and shadow). No compositor rule is needed. On a compositor without the protocol the options do nothing.
 
-On niri the bar blur uses xray (only the wallpaper is blurred, which is cheap). Pop-ups are blurred without xray by default, so with `dropdown-blur` niri re-blurs the windows behind an open dropdown whenever they change, which costs more GPU time.
+Wayle does not request blur for a surface whose opacity is 100 (the effect would be invisible), so `background-blur` only takes effect with `background-opacity` below 100, and `dropdown-blur` with `dropdown-opacity` below 100.
+
+According to niri's documentation, its blur of the bar can use the cheap xray mode (only the wallpaper is blurred) while pop-ups are blurred without xray by default, so `dropdown-blur` can cost more GPU time on niri while a dropdown is open. Other compositors differ.
+
+The blurred shape follows wayle's own `rounding` setting. If a custom stylesheet changes the `border-radius` of the bar or of a dropdown, the blurred corners will no longer match the visible ones (a notch of unblurred or extra blurred pixels at the corners).
 
 ### Using compositor rules instead
 

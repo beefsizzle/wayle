@@ -11,12 +11,14 @@ use tracing::{debug, warn};
 use wayle_config::{ClickAction, DropdownSources, schemas::bar::Location};
 use wayle_widgets::prelude::{BarButton, BarButtonInput};
 
-use super::coordinator::{DismissFn, OpenSurfaceCoordinator};
-use super::scrim::Scrim;
+use super::{
+    coordinator::{DismissFn, OpenSurfaceCoordinator},
+    scrim::Scrim,
+};
 use crate::{
     process,
     shell::{
-        background_effect::{BackgroundBlur, rounded_widget_shape},
+        background_effect::{BackgroundBlur, blur_is_visible, rounded_widget_shape},
         services::ShellServices,
     },
 };
@@ -107,7 +109,11 @@ impl DropdownOpener {
         registry: &Rc<DropdownRegistry>,
         widget: &impl IsA<gtk::Widget>,
     ) -> Self {
-        Self::register(registry, DropdownAnchor::widget(widget), Rc::new(NoDropdownSources))
+        Self::register(
+            registry,
+            DropdownAnchor::widget(widget),
+            Rc::new(NoDropdownSources),
+        )
     }
 
     /// Build the opener and publish it to the registry so the CLI list/toggle path
@@ -231,7 +237,6 @@ impl DropdownInstance {
             );
         });
 
-
         let thaw = thaw_target.clone();
         let wiring_closed = wiring.clone();
         let dismiss_closed = current_dismiss.clone();
@@ -283,7 +288,9 @@ impl DropdownInstance {
         let popover = self.popover.downgrade();
         let blur = BackgroundBlur::attach(&self.popover, move || {
             let config = config.config();
-            if !config.bar.dropdown_blur.get() {
+            if !config.bar.dropdown_blur.get()
+                || !blur_is_visible(config.bar.dropdown_opacity.get().value())
+            {
                 return None;
             }
             let popover = popover.upgrade()?;

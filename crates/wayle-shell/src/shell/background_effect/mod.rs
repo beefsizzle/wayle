@@ -224,6 +224,12 @@ impl Drop for Inner {
     }
 }
 
+/// Whether blur behind a surface with this opacity (0-100) can be seen at all. A fully opaque
+/// surface hides it, and asking would only make the compositor re-blur the scene for nothing.
+pub(crate) fn blur_is_visible(opacity_percent: u8) -> bool {
+    opacity_percent < 100
+}
+
 /// Blur shape for a rounded `target` widget inside `native`: the target's
 /// border box with its corners rounded by `radius_css` (a rounding CSS value
 /// such as `var(--bar-radius-lg)`) times `scale`.
@@ -236,4 +242,17 @@ pub(crate) fn rounded_widget_shape(
     let rect = widget_rect_in_surface(native, target)?;
     let radius = radius_from_css_var(radius_css, scale, current_rem_px());
     Some(rounded_rect(rect, radius))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blur_is_visible;
+
+    #[test]
+    fn only_translucent_surfaces_show_blur() {
+        assert!(blur_is_visible(0));
+        assert!(blur_is_visible(54));
+        assert!(blur_is_visible(99));
+        assert!(!blur_is_visible(100));
+    }
 }

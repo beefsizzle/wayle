@@ -11,8 +11,6 @@ use wayle_config::{
     ClickAction, Config,
     schemas::bar::{BarItem, BarLayout, Location},
 };
-
-use crate::services::shell_ipc::{DropdownAction, ShellIpcState};
 use wayle_widgets::prelude::BarSettings;
 
 use super::{
@@ -20,9 +18,12 @@ use super::{
     dropdowns::{DropdownOpener, DropdownRegistry},
     factory::{BarItemFactory, BarItemFactoryInit},
 };
-use crate::shell::{
-    background_effect::{BackgroundBlur, rounded_widget_shape},
-    services::ShellServices,
+use crate::{
+    services::shell_ipc::{DropdownAction, ShellIpcState},
+    shell::{
+        background_effect::{BackgroundBlur, blur_is_visible, rounded_widget_shape},
+        services::ShellServices,
+    },
 };
 
 impl Bar {
@@ -80,13 +81,14 @@ impl Bar {
     /// Keep the compositor blur behind this bar window in sync with the visible
     /// bar: the window's border box (CSS margins are the transparent inset and
     /// shadow room, never blurred), rounded like `bar.rounding`. Empty — no
-    /// protocol use at all — while `bar.background-blur` is off.
+    /// protocol use at all — while `bar.background-blur` is off or the bar is fully opaque.
     pub(super) fn attach_blur(window: &gtk::Window, services: &ShellServices) -> BackgroundBlur {
         let config = services.config.clone();
         let weak_window = window.downgrade();
         BackgroundBlur::attach(window, move || {
             let bar = &config.config().bar;
-            if !bar.background_blur.get() {
+            if !bar.background_blur.get() || !blur_is_visible(bar.background_opacity.get().value())
+            {
                 return None;
             }
             let window = weak_window.upgrade()?;
@@ -328,7 +330,10 @@ impl Bar {
 
         let target = self.dropdown_targets.borrow().get(identifier).cloned();
         let Some((opener, dropdown)) = target else {
-            debug!(identifier, "dropdown request: identifier not present on this bar");
+            debug!(
+                identifier,
+                "dropdown request: identifier not present on this bar"
+            );
             return;
         };
         // If this bar is hidden (`wayle panel hide`), a CLI-opened dropdown would

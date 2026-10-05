@@ -21,6 +21,29 @@ mod watchers;
 
 use shell::{Shell, ShellInit};
 
+/// Caps glibc's per-thread malloc arenas at two.
+///
+/// Every thread that allocates gets its own arena (up to eight per core). With the GL renderer
+/// each popover's GPU-driver helper threads claimed their own, and the fragmentation they left
+/// added ~45 MB of resident memory once every dropdown had been opened (305 MB -> 260 MB in the
+/// nested harness). A `MALLOC_ARENA_MAX` set by the user wins.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn limit_malloc_arenas() {
+    if env::var_os("MALLOC_ARENA_MAX").is_some() {
+        return;
+    }
+
+    #[allow(unsafe_code)]
+    // SAFETY: `mallopt` only changes an allocator tunable, and this runs first thing in `run`,
+    // before the process has started any other thread.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn limit_malloc_arenas() {}
+
 /// Launches the Wayle shell GUI.
 ///
 /// Creates its own tokio runtime internally, so this must not be called
@@ -34,6 +57,8 @@ use shell::{Shell, ShellInit};
 /// Returns error on tracing init failure, runtime creation failure,
 /// or service bootstrap failure.
 pub fn run(config_override: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+    limit_malloc_arenas();
+
     if env::var_os("GSK_RENDERER").is_none() {
         #[allow(unsafe_code)]
         // SAFETY: single-threaded, called before any runtime or GTK init

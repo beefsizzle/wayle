@@ -24,6 +24,7 @@ futures.workspace = true
 rust-embed.workspace = true
 indicatif.workspace = true
 notify.workspace = true
+libc.workspace = true
 relm4.workspace = true
 sd-notify.workspace = true
 serde.workspace = true

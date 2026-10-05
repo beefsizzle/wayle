@@ -5415,6 +5415,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "indicatif",
+ "libc",
  "minijinja",
  "notify",
  "relm4",

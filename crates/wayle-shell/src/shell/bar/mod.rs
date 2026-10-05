@@ -18,7 +18,10 @@ use wayle_widgets::{prelude::BarSettings, styling::InlineStyling};
 use self::dropdowns::{DropdownOpener, DropdownRegistry};
 use crate::{
     services::shell_ipc::DropdownAction,
-    shell::{helpers::layer_shell::apply_layer, services::ShellServices},
+    shell::{
+        background_effect::BackgroundBlur, helpers::layer_shell::apply_layer,
+        services::ShellServices,
+    },
 };
 
 pub(crate) struct Bar {
@@ -28,6 +31,8 @@ pub(crate) struct Bar {
     layout: BarLayout,
     css_provider: gtk::CssProvider,
     last_css: String,
+    /// Compositor blur behind the visible bar (`bar.background-blur`).
+    blur: BackgroundBlur,
 
     left: FactoryVecDeque<BarItemFactory>,
     center: FactoryVecDeque<BarItemFactory>,
@@ -175,6 +180,7 @@ impl Component for Bar {
         });
 
         Self::install_dismiss_controllers(&root, &dropdowns);
+        let blur = Self::attach_blur(&root, &init.services);
 
         let mut model = Self {
             settings,
@@ -190,6 +196,7 @@ impl Component for Bar {
             },
             css_provider,
             last_css: String::new(),
+            blur,
             left,
             center,
             right,
@@ -237,6 +244,8 @@ impl Component for Bar {
                     self.css_provider.load_from_string(&new_css);
                     self.last_css = new_css;
                 }
+                // Covers the blur opt-in, which changes no CSS.
+                self.blur.refresh();
             }
             BarCmd::ExclusiveChanged(exclusive) => {
                 Self::apply_exclusive_zone(root, exclusive);

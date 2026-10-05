@@ -20,7 +20,10 @@ use super::{
     dropdowns::{DropdownOpener, DropdownRegistry},
     factory::{BarItemFactory, BarItemFactoryInit},
 };
-use crate::shell::services::ShellServices;
+use crate::shell::{
+    background_effect::{BackgroundBlur, rounded_widget_shape},
+    services::ShellServices,
+};
 
 impl Bar {
     /// Whether this bar should be visible at startup: its layout says `show` and its
@@ -72,6 +75,28 @@ impl Bar {
             }
         });
         window.add_controller(click_dismiss);
+    }
+
+    /// Keep the compositor blur behind this bar window in sync with the visible
+    /// bar: the window's border box (CSS margins are the transparent inset and
+    /// shadow room, never blurred), rounded like `bar.rounding`. Empty — no
+    /// protocol use at all — while `bar.background-blur` is off.
+    pub(super) fn attach_blur(window: &gtk::Window, services: &ShellServices) -> BackgroundBlur {
+        let config = services.config.clone();
+        let weak_window = window.downgrade();
+        BackgroundBlur::attach(window, move || {
+            let bar = &config.config().bar;
+            if !bar.background_blur.get() {
+                return None;
+            }
+            let window = weak_window.upgrade()?;
+            rounded_widget_shape(
+                &window,
+                &window,
+                bar.rounding.get().to_bar_css_values().container,
+                f64::from(bar.scale.get().value()),
+            )
+        })
     }
 
     pub(super) fn apply_anchors(window: &gtk::Window, location: Location) {

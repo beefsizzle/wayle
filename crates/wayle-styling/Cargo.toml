@@ -24,6 +24,7 @@ wayle-config = { path = "../wayle-config" }
 
 [dev-dependencies]
 gtk4 = { workspace = true, features = ["v4_12"] }
+toml.workspace = true
 
 [lints]
 workspace = true

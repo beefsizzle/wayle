@@ -399,25 +399,33 @@ const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.wayle";
 async fn init_portal_backend(notification: Option<&NotificationService>) -> Option<PortalHost> {
     let notification = notification?;
 
-    let mut host = match PortalHost::new(PORTAL_BUS_NAME).await {
-        Ok(host) => host,
-        Err(err) => {
-            warn!(error = %err, "cannot open portal backend connection; portal notifications disabled");
-            return None;
+    match try_init_portal_backend(notification).await {
+        Ok(host) => {
+            info!("portal notification backend registered at {PORTAL_BUS_NAME}");
+            Some(host)
         }
-    };
+        Err(reason) => {
+            warn!(%reason, "portal notifications disabled");
+            None
+        }
+    }
+}
+
+/// The steps of [`init_portal_backend`], each failure described for the log.
+async fn try_init_portal_backend(notification: &NotificationService) -> Result<PortalHost, String> {
+    let mut host = PortalHost::new(PORTAL_BUS_NAME)
+        .await
+        .map_err(|err| format!("cannot open portal backend connection: {err}"))?;
 
     // Register the interface object BEFORE requesting the well-known name.
-    if let Err(err) = notification.attach_portal(host.connection()).await {
-        warn!(error = %err, "cannot register portal notification backend; portal notifications disabled");
-        return None;
-    }
+    notification
+        .attach_portal(host.connection())
+        .await
+        .map_err(|err| format!("cannot register portal notification backend: {err}"))?;
 
-    if let Err(err) = host.serve().await {
-        warn!(error = %err, "cannot acquire {PORTAL_BUS_NAME}; portal notifications disabled");
-        return None;
-    }
+    host.serve()
+        .await
+        .map_err(|err| format!("cannot acquire {PORTAL_BUS_NAME}: {err}"))?;
 
-    info!("portal notification backend registered at {PORTAL_BUS_NAME}");
-    Some(host)
+    Ok(host)
 }

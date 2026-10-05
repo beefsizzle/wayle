@@ -1,3 +1,4 @@
+mod background_effect;
 mod bar;
 mod helpers;
 mod notification_popup;

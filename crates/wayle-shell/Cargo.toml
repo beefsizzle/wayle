@@ -13,6 +13,7 @@ build = "build.rs"
 gtk4-layer-shell.workspace = true
 gtk4.workspace = true
 gdk4.workspace = true
+gdk4-wayland.workspace = true
 gdk-pixbuf.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
@@ -68,6 +69,8 @@ wayle-weather.workspace = true
 wayle-widgets = { workspace = true }
 zbus.workspace = true
 gio-unix = { version = "0.22.6", default-features = false }
+wayland-client.workspace = true
+wayland-protocols.workspace = true
 
 [dev-dependencies]
 glob.workspace = true

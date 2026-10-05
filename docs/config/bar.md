@@ -24,6 +24,7 @@ Bar chrome: per-monitor layout, spacing, colors, and button styling.
 | `exclusive` | bool | `true` | Reserve screen space for the bar. |
 | `layer` | [`Layer`](/config/types#layer) | `"top"` | Layer-shell layer the bar is placed on. |
 | `background-opacity` | [`Percentage`](/config/types#percentage) | `100` | Bar background opacity (0-100). |
+| `background-blur` | bool | `false` | Ask the compositor to blur what is behind the bar. |
 | `border-location` | [`BorderLocation`](/config/types#border-location) | `"none"` | Border placement for bar. |
 | `border-width` | u8 | `1` | Border width for bar (pixels). |
 | `rounding` | [`RoundingLevel`](/config/types#rounding-level) | `"none"` | Corner rounding level for the bar. |
@@ -78,6 +79,16 @@ When disabled, windows may overlap the bar and the bar draws over them.
 
 :::
 
+::: details More about `background-blur`
+
+Uses the `ext-background-effect-v1` Wayland protocol, so the blur
+covers exactly the visible bar (rounded corners included) and never
+the transparent inset around it. Only visible when
+`background-opacity` is below 100. Compositors without the protocol
+ignore it. With this on, no compositor-side blur rule is needed.
+
+:::
+
 ## Colors
 
 | Field | Type | Default | Description |
@@ -117,8 +128,20 @@ When disabled, windows may overlap the bar and the bar draws over them.
 |---|---|---|---|
 | `dropdown-shadow` | bool | `true` | Enable dropdown panel shadow. |
 | `dropdown-opacity` | [`Percentage`](/config/types#percentage) | `100` | Dropdown panel opacity (0-100). |
+| `dropdown-blur` | bool | `false` | Ask the compositor to blur what is behind dropdown panels. |
 | `dropdown-autohide` | bool | `true` | Close dropdown when clicking outside it. |
 | `dropdown-freeze-label` | bool | `false` | Freeze the bar button label while its dropdown is open. |
+
+::: details More about `dropdown-blur`
+
+Uses the `ext-background-effect-v1` Wayland protocol, so the blur
+covers exactly the visible panel and never its transparent margin or
+shadow. Only visible when `dropdown-opacity` is below 100.
+Compositors without the protocol ignore it. Separate from
+`background-blur` because pop-up blur usually costs more (niri
+re-blurs the live scene behind pop-ups, not only the wallpaper).
+
+:::
 
 ::: details More about `dropdown-freeze-label`
 
@@ -142,6 +165,7 @@ exclusive = true
 layer = "top"
 bg = "bg-surface"
 background-opacity = 100
+background-blur = false
 border-location = "none"
 border-width = 1
 border-color = "border-accent"
@@ -170,6 +194,7 @@ button-group-border-color = "border-accent"
 button-group-rounding = "sm"
 dropdown-shadow = true
 dropdown-opacity = 100
+dropdown-blur = false
 dropdown-autohide = true
 dropdown-freeze-label = false
 ```

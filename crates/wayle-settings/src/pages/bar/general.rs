@@ -42,6 +42,7 @@ pub(crate) fn entry(config: &Config) -> LeafEntry {
                     items: vec![
                         color_value(&bar.bg),
                         percentage(&bar.background_opacity),
+                        toggle(&bar.background_blur),
                         enum_select(&bar.rounding),
                         enum_select(&bar.shadow),
                     ],

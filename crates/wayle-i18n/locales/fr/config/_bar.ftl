@@ -32,6 +32,9 @@ settings-bar-bg = Arrière-plan
 settings-bar-background-opacity = Opacité de l'arrière-plan
     .description = Transparence de l'arrière-plan de la barre (0-100 %)
 
+settings-bar-background-blur = Flou de l'arrière-plan
+    .description = Demander au compositeur de flouter ce qui se trouve derrière la barre (nécessite ext-background-effect et une opacité inférieure à 100 %)
+
 settings-bar-border-location = Position de la bordure
     .description = Emplacement de la bordure de la barre
 
@@ -115,6 +118,9 @@ settings-bar-dropdown-shadow = Ombre du menu déroulant
 
 settings-bar-dropdown-opacity = Opacité du menu déroulant
     .description = Transparence des panneaux déroulants (0-100 %)
+
+settings-bar-dropdown-blur = Flou du menu déroulant
+    .description = Demander au compositeur de flouter ce qui se trouve derrière les panneaux déroulants (nécessite ext-background-effect et une opacité inférieure à 100 %)
 
 settings-bar-dropdown-freeze-label = Figer le libellé
     .description = Empêcher la mise à jour du libellé du bouton de la barre lorsque son menu déroulant est ouvert

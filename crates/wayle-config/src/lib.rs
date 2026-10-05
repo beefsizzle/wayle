@@ -200,4 +200,33 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn blur_options_default_off_and_parse_kebab_case() -> Result<(), toml::de::Error> {
+        let config = Config::default();
+        assert!(!config.bar.background_blur.get(), "bar blur must be opt-in");
+        assert!(
+            !config.bar.dropdown_blur.get(),
+            "dropdown blur must be opt-in"
+        );
+
+        let toml_input: toml::Value = toml::from_str(
+            r#"
+            [bar]
+            background-blur = true
+            dropdown-blur = true
+            "#,
+        )?;
+        config.apply_config_layer(&toml_input, "");
+        config.commit_config_reload();
+
+        assert!(config.bar.background_blur.get());
+        assert!(config.bar.dropdown_blur.get());
+
+        let keys = Config::all_i18n_keys();
+        assert!(keys.contains(&"settings-bar-background-blur"));
+        assert!(keys.contains(&"settings-bar-dropdown-blur"));
+
+        Ok(())
+    }
 }

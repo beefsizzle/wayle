@@ -38,6 +38,9 @@ settings-bar-bg = Background
 settings-bar-background-opacity = Background Opacity
     .description = Bar background transparency (0-100%)
 
+settings-bar-background-blur = Background Blur
+    .description = Ask the compositor to blur what is behind the bar (needs ext-background-effect support and opacity below 100%)
+
 settings-bar-border-location = Border Location
     .description = Border placement for the bar
 
@@ -121,6 +124,9 @@ settings-bar-dropdown-shadow = Dropdown Shadow
 
 settings-bar-dropdown-opacity = Dropdown Opacity
     .description = Transparency for dropdown panels (0-100%)
+
+settings-bar-dropdown-blur = Dropdown Blur
+    .description = Ask the compositor to blur what is behind dropdown panels (needs ext-background-effect support and opacity below 100%)
 
 settings-bar-dropdown-freeze-label = Freeze Label
     .description = Prevent bar button label from updating while its dropdown is open

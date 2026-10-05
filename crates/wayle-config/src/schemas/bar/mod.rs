@@ -103,6 +103,17 @@ pub struct BarConfig {
     #[default(Percentage::new(100))]
     pub background_opacity: ConfigProperty<Percentage>,
 
+    /// Ask the compositor to blur what is behind the bar.
+    ///
+    /// Uses the `ext-background-effect-v1` Wayland protocol, so the blur
+    /// covers exactly the visible bar (rounded corners included) and never
+    /// the transparent inset around it. Only visible when
+    /// `background-opacity` is below 100. Compositors without the protocol
+    /// ignore it. With this on, no compositor-side blur rule is needed.
+    #[serde(rename = "background-blur")]
+    #[default(false)]
+    pub background_blur: ConfigProperty<bool>,
+
     /// Border placement for bar.
     #[serde(rename = "border-location")]
     #[default(BorderLocation::None)]
@@ -240,6 +251,18 @@ pub struct BarConfig {
     #[serde(rename = "dropdown-opacity")]
     #[default(Percentage::new(100))]
     pub dropdown_opacity: ConfigProperty<Percentage>,
+
+    /// Ask the compositor to blur what is behind dropdown panels.
+    ///
+    /// Uses the `ext-background-effect-v1` Wayland protocol, so the blur
+    /// covers exactly the visible panel and never its transparent margin or
+    /// shadow. Only visible when `dropdown-opacity` is below 100.
+    /// Compositors without the protocol ignore it. Separate from
+    /// `background-blur` because pop-up blur usually costs more (niri
+    /// re-blurs the live scene behind pop-ups, not only the wallpaper).
+    #[serde(rename = "dropdown-blur")]
+    #[default(false)]
+    pub dropdown_blur: ConfigProperty<bool>,
 
     /// Freeze the bar button label while its dropdown is open.
     ///

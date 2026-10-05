@@ -29,7 +29,10 @@ pub(crate) fn entry(config: &Config) -> LeafEntry {
                 },
                 SectionSpec {
                     title_key: "settings-section-appearance",
-                    items: vec![percentage(&bar.dropdown_opacity)],
+                    items: vec![
+                        percentage(&bar.dropdown_opacity),
+                        toggle(&bar.dropdown_blur),
+                    ],
                 },
             ],
         ),

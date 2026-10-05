@@ -81,3 +81,35 @@ Set `show = false` on an entry to hide the bar on that monitor. No other fields 
 monitor = "HDMI-2"
 show = false
 ```
+
+## Background blur
+
+Wayle can ask the compositor to blur what is behind the bar and its dropdowns. The effect is only visible on translucent surfaces, so lower the opacity too:
+
+```toml
+[bar]
+background-opacity = 70
+background-blur = true
+
+dropdown-opacity = 85
+dropdown-blur = true
+```
+
+The request goes through the standard [`ext-background-effect-v1`](https://wayland.app/protocols/ext-background-effect-v1) Wayland protocol, and wayle sends the exact visible shape: the bar itself (following `rounding`, without the `inset-edge`/`inset-ends` gap around it) and each dropdown card (without its transparent margin and shadow). No compositor rule is needed. On a compositor without the protocol the options do nothing.
+
+On niri the bar blur uses xray (only the wallpaper is blurred, which is cheap). Pop-ups are blurred without xray by default, so with `dropdown-blur` niri re-blurs the windows behind an open dropdown whenever they change, which costs more GPU time.
+
+### Using compositor rules instead
+
+A compositor rule blurs the *whole* surface, including the transparent area around the visible bar or card, so you get a blurred halo. If you still prefer a niri `layer-rule`, anchor the namespace to the bar:
+
+```kdl
+layer-rule {
+    match namespace="^wayle-bar-"
+    background-effect {
+        blur true
+    }
+}
+```
+
+An unanchored `namespace="wayle"` also matches `wayle-dropdown-scrim`, a full-screen transparent surface that is mapped while a dropdown or menu is open, and blurs the whole screen.

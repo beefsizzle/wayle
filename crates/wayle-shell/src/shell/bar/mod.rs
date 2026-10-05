@@ -244,8 +244,9 @@ impl Component for Bar {
                     self.css_provider.load_from_string(&new_css);
                     self.last_css = new_css;
                 }
-                // Covers the blur opt-in, which changes no CSS.
+                // Covers the blur opt-ins, which change no CSS.
                 self.blur.refresh();
+                self.dropdowns.refresh_blur();
             }
             BarCmd::ExclusiveChanged(exclusive) => {
                 Self::apply_exclusive_zone(root, exclusive);

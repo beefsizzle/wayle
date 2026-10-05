@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
     rc::Rc,
 };
@@ -13,7 +13,13 @@ use wayle_widgets::prelude::{BarButton, BarButtonInput};
 
 use super::coordinator::{DismissFn, OpenSurfaceCoordinator};
 use super::scrim::Scrim;
-use crate::{process, shell::services::ShellServices};
+use crate::{
+    process,
+    shell::{
+        background_effect::{BackgroundBlur, rounded_widget_shape},
+        services::ShellServices,
+    },
+};
 
 /// Per-bar wiring attached to each dropdown after creation, so its open/close
 /// hooks can reach the shared dismissal coordinator (which owns the scrim).
@@ -205,6 +211,9 @@ pub(crate) struct DropdownInstance {
     /// This dropdown's dismiss closure while it's the open surface, so
     /// `connect_closed` can tell the coordinator it closed.
     current_dismiss: Rc<RefCell<Option<DismissFn>>>,
+    /// Compositor blur behind the visible card (`bar.dropdown-blur`), attached
+    /// by `DropdownRegistry::get_or_create`.
+    blur: OnceCell<BackgroundBlur>,
 }
 
 impl DropdownInstance {
@@ -261,6 +270,37 @@ impl DropdownInstance {
             thaw_target,
             wiring,
             current_dismiss,
+            blur: OnceCell::new(),
+        }
+    }
+
+    /// Keep the compositor blur behind this popover in sync with its visible
+    /// card: the popover's child (the `.dropdown` box) without the margins
+    /// `apply_margins` adds around it and without the shadow area, rounded
+    /// like `styling.rounding` (the card's `--rounding-container`).
+    fn attach_blur(&self, services: &ShellServices) {
+        let config = services.config.clone();
+        let popover = self.popover.downgrade();
+        let blur = BackgroundBlur::attach(&self.popover, move || {
+            let config = config.config();
+            if !config.bar.dropdown_blur.get() {
+                return None;
+            }
+            let popover = popover.upgrade()?;
+            let card = popover.child()?;
+            rounded_widget_shape(
+                &popover,
+                &card,
+                config.styling.rounding.get().to_css_values().container,
+                f64::from(config.styling.scale.get().value()),
+            )
+        });
+        let _ = self.blur.set(blur);
+    }
+
+    fn refresh_blur(&self) {
+        if let Some(blur) = self.blur.get() {
+            blur.refresh();
         }
     }
 
@@ -628,6 +668,13 @@ impl DropdownRegistry {
         self.pending_opener.borrow_mut().take()
     }
 
+    /// Re-evaluate every cached dropdown's blur (after `bar.dropdown-blur` changed).
+    pub(crate) fn refresh_blur(&self) {
+        for instance in self.cache.borrow().values() {
+            instance.refresh_blur();
+        }
+    }
+
     pub(crate) fn warm_all(&self) {
         for name in super::DROPDOWN_NAMES {
             let _ = self.get_or_create(name);
@@ -655,6 +702,7 @@ impl DropdownRegistry {
         instance.attach(DropdownWiring {
             coordinator: self.coordinator.clone(),
         });
+        instance.attach_blur(&self.services);
         cache.insert(name.to_owned(), instance.clone());
         debug!(dropdown = name, "dropdown cached");
         Some(instance)

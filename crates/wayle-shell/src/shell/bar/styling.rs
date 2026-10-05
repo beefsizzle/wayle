@@ -53,6 +53,7 @@ impl InlineStyling for Bar {
         bar.bg.subscribe_changes(tx.clone());
         bar.background_opacity.subscribe_changes(tx.clone());
         bar.background_blur.subscribe_changes(tx.clone());
+        bar.dropdown_blur.subscribe_changes(tx.clone());
         bar.button_opacity.subscribe_changes(tx.clone());
         bar.button_bg_opacity.subscribe_changes(tx.clone());
         bar.button_label_weight.subscribe_changes(tx.clone());

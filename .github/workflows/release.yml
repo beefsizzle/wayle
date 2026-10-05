@@ -12,6 +12,8 @@ env:
 
 jobs:
     changelog:
+        # Publishes releases/docs for the upstream project only; forks just run CI.
+        if: github.repository == 'wayle-rs/wayle'
         name: Changelog
         runs-on: ubuntu-latest
         outputs:

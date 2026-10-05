@@ -13,6 +13,8 @@ concurrency:
 
 jobs:
     deploy:
+        # Publishes releases/docs for the upstream project only; forks just run CI.
+        if: github.repository == 'wayle-rs/wayle'
         name: Build and deploy to Cloudflare Pages
         runs-on: ubuntu-latest
         steps:
